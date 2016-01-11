@@ -9,9 +9,11 @@ ADD . /go/src/github.com/rascalking/linkerss
 # (You may fetch or manage dependencies here,
 # either manually or with a tool like "godep".)
 RUN go get \
-    github.com/coreos/pkg/flagutil \
-    github.com/dghubble/go-twitter/twitter \
-    golang.org/x/oauth2
+	    github.com/coreos/pkg/flagutil \
+	    github.com/dghubble/go-twitter/twitter \
+	    github.com/gorilla/feeds \
+	    golang.org/x/net/html \
+	    golang.org/x/oauth2
 RUN go install github.com/rascalking/linkerss
 
 # Run the outyet command by default when the container starts.
