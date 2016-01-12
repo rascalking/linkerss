@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"flag"
+    "fmt"
 	"log"
 	//"io/ioutil"
 	"html/template"
@@ -17,29 +18,38 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// TODO - don't hardcode @rascalking
-// TODO - put it behind an http server
-
 func main() {
-	// grab the acccess token
+	// parse flags
 	flags := flag.NewFlagSet("linkerss", flag.ExitOnError)
 	accessToken := flags.String("app-access-token", "",
-		"Twitter Application Access Token")
+		"Twitter application access token")
+    listenAddress := flags.String("listen-address", "localhost:9999",
+        "Address and port to listen on")
 	flags.Parse(os.Args[1:])
 	flagutil.SetFlagsFromEnv(flags, "TWITTER")
 	if *accessToken == "" {
-		log.Fatal("Application Access Token required")
+		log.Fatal("Application access token required")
 	}
 
+    // answer http requests
+    http.HandleFunc("/user", func(w http.ResponseWriter, req *http.Request) {
+        userHandler(accessToken, w, req)
+    })
+    log.Fatal(http.ListenAndServe(*listenAddress, nil))
+}
+
+func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) {
+    screenName := req.URL.Query().Get("screenName")
+
 	// set up the twitter client
-	config := &oauth2.Config{}
-	token := &oauth2.Token{AccessToken: *accessToken}
-	httpClient := config.Client(oauth2.NoContext, token)
+	config := oauth2.Config{}
+	token := oauth2.Token{AccessToken: *accessToken}
+	httpClient := config.Client(oauth2.NoContext, &token)
 	client := twitter.NewClient(httpClient)
 
 	// fetch the timeline
 	userTimelineParams := &twitter.UserTimelineParams{
-		ScreenName: "rascalking", Count: 5}
+		ScreenName: screenName, Count: 5}
 	tweets, _, err := client.Timelines.UserTimeline(userTimelineParams)
 	if err != nil {
 		log.Fatal("error getting user timeline: %v", err)
@@ -54,16 +64,16 @@ func main() {
 	}
 
 	// turn them into feed entries
-	feed := tweetsToFeed(urlTweets)
+	feed := tweetsToFeed(urlTweets, screenName)
 
-	// output as rss
-	err = feed.WriteRss(os.Stdout)
+	// write back to client as rss
+	err = feed.WriteRss(w)
 	if err != nil {
 		log.Fatal("error outputting as rss: %v", err)
 	}
 }
 
-func tweetsToFeed(tweets []twitter.Tweet) *feeds.Feed {
+func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	const htmlTemplate = `
     <div>
     <a href="{{.Link}}">{{.Title}}</a> via {{.Author.Name}}
@@ -72,10 +82,12 @@ func tweetsToFeed(tweets []twitter.Tweet) *feeds.Feed {
 	templ := template.Must(template.New("item").Parse(htmlTemplate))
 
 	feed := &feeds.Feed{
-		Title:       "@rascalking's linkerss",
-		Link:        &feeds.Link{Href: "https://twitter.com/rascalking"},
-		Description: "Tweets with links in @rascalking's timeline",
-		Author:      &feeds.Author{"David Bonner", "dbonner@gmail.com"},
+		Title:       fmt.Sprintf("@%s's linkerss", screenName),
+		Link:        &feeds.Link{Href: fmt.Sprintf("https://twitter.com/%s",
+                                                   screenName)},
+		Description: fmt.Sprintf("Tweets with links in @%s's timeline",
+                                 screenName),
+		Author:      &feeds.Author{screenName, ""},
 		Created:     time.Now(),
 	}
 
