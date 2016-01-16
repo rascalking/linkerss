@@ -1,2 +1,2 @@
 # linkerss
-Generates an RSS feed of tweets in a timeline that contain links.
+Generates an RSS feed of links from tweets in a timeline.
