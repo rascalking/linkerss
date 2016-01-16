@@ -7,5 +7,5 @@ RUN go get \
 	    golang.org/x/net/html \
 	    golang.org/x/oauth2
 RUN go install github.com/rascalking/linkerss
-ENTRYPOINT /go/bin/linkerss
+CMD /go/bin/linkerss
 EXPOSE 9999

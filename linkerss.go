@@ -23,7 +23,7 @@ func main() {
 	flags := flag.NewFlagSet("linkerss", flag.ExitOnError)
 	accessToken := flags.String("app-access-token", "",
 		"Twitter application access token")
-    listenAddress := flags.String("listen-address", "localhost:9999",
+    listenAddress := flags.String("listen-address", "0.0.0.0:9999",
         "Address and port to listen on")
 	flags.Parse(os.Args[1:])
 	flagutil.SetFlagsFromEnv(flags, "TWITTER")
@@ -35,10 +35,13 @@ func main() {
     http.HandleFunc("/user", func(w http.ResponseWriter, req *http.Request) {
         userHandler(accessToken, w, req)
     })
+
+    log.Println("Listening on " + *listenAddress)
     log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
 
 func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) {
+    log.Println("%v", req)
     screenName := req.URL.Query().Get("screenName")
 
 	// set up the twitter client
