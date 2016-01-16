@@ -2,21 +2,27 @@ package main
 
 import (
 	"bytes"
+    "encoding/json"
 	"flag"
     "fmt"
-	"log"
-	//"io/ioutil"
 	"html/template"
+	"log"
 	"net/http"
 	"os"
+    "regexp"
+    "strings"
 	"time"
 
 	"github.com/coreos/pkg/flagutil"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/gorilla/feeds"
-	//"golang.org/x/net/html"
+    "golang.org/x/net/html"
 	"golang.org/x/oauth2"
 )
+
+
+var textHtml = regexp.MustCompile("^text/html($|;)")
+
 
 func main() {
 	// parse flags
@@ -31,14 +37,16 @@ func main() {
 		log.Fatal("Application access token required")
 	}
 
-    // answer http requests
+    // set up handlers
     http.HandleFunc("/user", func(w http.ResponseWriter, req *http.Request) {
         userHandler(accessToken, w, req)
     })
 
+    // answer http requests
     log.Println("Listening on " + *listenAddress)
     log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
+
 
 func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) {
     log.Println("%v", req)
@@ -79,7 +87,7 @@ func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) 
 func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	const htmlTemplate = `
     <div>
-    <a href="{{.Link}}">{{.Title}}</a> via {{.Author.Name}}
+    <a href="{{.Link.Href}}">{{.Title}}</a> via {{.Author.Name}}
     </div>
     `
 	templ := template.Must(template.New("item").Parse(htmlTemplate))
@@ -106,26 +114,20 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 				continue
 			}
 			defer resp.Body.Close()
-			/*
-			   body, err := ioutil.ReadAll(resp.Body)
-			   if err != nil {
-			       log.Printf("unable to read the body of %s: %s",
-			                   u.ExpandedURL, err)
-			       continue
-			   }
-			*/
 
 			// figure out a title
 			title := u.ExpandedURL
-			/*
-			   if resp.Header.Get("Content-Type") == "text/html" {
-			       doc, err := html.Parse(resp.Body)
-			       if err != nil {
-			           log.Printf("unable to parse the body of %s: %s",
-			                       u.ExpandedURL, err)
-			       }
-			   }
-			*/
+            switch {
+            case textHtml.MatchString(resp.Header.Get("Content-Type")):
+                doc, err := html.Parse(resp.Body)
+                if err != nil {
+                    log.Printf("unable to parse the body of %s: %s",
+                               u.ExpandedURL, err)
+                    continue
+                }
+                title = getTitle(doc)
+            // TODO: pdf, images?
+            }
 
 			// generate feed item
 			item := &feeds.Item{
@@ -135,6 +137,10 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 				Author:      author,
 				//Created: t.CreatedAt, // TODO - parse string into time.Time
 			}
+            itemJson, _ := json.Marshal(item)
+            var buf bytes.Buffer
+            json.Indent(&buf, itemJson, "", "    ")
+            buf.WriteTo(os.Stdout)
 
 			// now build the item description
 			buffer := new(bytes.Buffer)
@@ -147,4 +153,19 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	}
 
 	return feed
+}
+
+
+func getTitle(n *html.Node) string {
+    if n.Type == html.ElementNode && n.Data == "title" {
+        return strings.TrimSpace(n.FirstChild.Data)
+    }
+
+    for c := n.FirstChild; c != nil; c = c.NextSibling {
+        title := getTitle(c)
+        if title != "" {
+            return title
+        }
+    }
+    return ""
 }
