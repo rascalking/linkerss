@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,18 +21,28 @@ import (
 )
 
 var textHtml = regexp.MustCompile("^text/html($|;)")
+var (
+	flags = flag.NewFlagSet("linkerss", flag.ExitOnError)
+	accessToken = flags.String("app-access-token", "",
+		"Twitter application access token")
+	listenAddress = flags.String("listen-address", "0.0.0.0:9999",
+		"Address and port to listen on")
+	maxTweets = flags.Int("max-tweets", 100,
+		"Max number of tweets to pull from Twitter")
+	defaultNumTweets = flags.Int("num-tweets", 20,
+		"Default number of tweets to pull from twitter, can be overridden" +
+		"via query parameter")
+)
 
 func main() {
 	// parse flags
-	flags := flag.NewFlagSet("linkerss", flag.ExitOnError)
-	accessToken := flags.String("app-access-token", "",
-		"Twitter application access token")
-	listenAddress := flags.String("listen-address", "0.0.0.0:9999",
-		"Address and port to listen on")
 	flags.Parse(os.Args[1:])
 	flagutil.SetFlagsFromEnv(flags, "TWITTER")
 	if *accessToken == "" {
 		log.Fatal("Application access token required")
+	}
+	if *defaultNumTweets > *maxTweets {
+		log.Fatal("--num-tweets cannot be larger than --max-tweets")
 	}
 
 	// set up handlers
@@ -44,9 +55,22 @@ func main() {
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
 
+// TODO: caching somewhere
 func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) {
-	log.Println("%v", req)
-	screenName := req.URL.Query().Get("screenName")
+	log.Printf("%+v\n", req)
+
+	// TODO: has to be a cleaner pattern than this to get an int from query params
+	numTweetsStr := req.URL.Query().Get("numTweets")
+	numTweets := *defaultNumTweets
+	if numTweetsStr != "" {
+		var err error
+		numTweets, err = strconv.Atoi(numTweetsStr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			// TODO: include explanation in body
+			return
+		}
+	}
 
 	// set up the twitter client
 	config := oauth2.Config{}
@@ -55,8 +79,9 @@ func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) 
 	client := twitter.NewClient(httpClient)
 
 	// fetch the timeline
+	screenName := req.URL.Query().Get("screenName")
 	userTimelineParams := &twitter.UserTimelineParams{
-		ScreenName: screenName, Count: 5}
+		ScreenName: screenName, Count: numTweets}
 	tweets, _, err := client.Timelines.UserTimeline(userTimelineParams)
 	if err != nil {
 		log.Fatal("error getting user timeline: %v", err)
@@ -80,6 +105,7 @@ func userHandler(accessToken *string, w http.ResponseWriter, req *http.Request) 
 	}
 }
 
+// TODO: split this out into a separate package
 func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	const htmlTemplate = `
     <div>
@@ -108,6 +134,8 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 			author = &feeds.Author{t.RetweetedStatus.User.Name, ""}
 		}
 
+
+		// TODO: head the url, then split handling out by content-type
 		for _, u := range t.Entities.Urls {
 			// fetch page
 			resp, err := http.Get(u.ExpandedURL)
@@ -128,7 +156,6 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 					continue
 				}
 				title = getTitle(doc)
-				// TODO: pdf, images?
 			}
 
 			// parse out the timestamp
