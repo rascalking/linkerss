@@ -39,7 +39,11 @@ func main() {
 						*maxNumTweets}
 	http.Handle("/user", linkerssHandler)
 
+	// log our args before we start listening
+	log.Println("Listening on:" + *listenAddress)
+	log.Println("Default number of tweets:", *defaultNumTweets)
+	log.Println("Maximum number of tweets:", *maxNumTweets)
+
 	// answer http requests
-	log.Println("Listening on " + *listenAddress)
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
 }
