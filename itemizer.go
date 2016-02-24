@@ -17,6 +17,15 @@ import (
 
 var tokens = make(chan struct{}, 20)
 var textHtml = regexp.MustCompile("^text/html($|;)")
+const defaultDescription = `
+<div>
+  <a href="{{.Link.Href}}">{{.Title}}</a>
+</div>
+<div>
+via <a href="https://twitter.com/{{.Author.Name}}">{{.Author.Name}}</a>
+</div>
+`
+var defaultDescriptionTemplate = template.Must(template.New("item").Parse(defaultDescription))
 
 type itemizerResult struct {
 	position int
@@ -31,7 +40,7 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 		for _, url := range tweet.Entities.Urls {
 			log.Printf("Launching itemize(%d, %s, %d) in a goroutine",
 						position, url.ExpandedURL, tweet.ID, resultChan)
-			go itemize(position, url.ExpandedURL, tweet, resultChan)
+			go itemize(position, url.ExpandedURL, &tweet, resultChan)
 			position++
 		}
 	}
@@ -68,31 +77,13 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	return feed
 }
 
-func itemize(position int, url string, tweet twitter.Tweet, resultChan chan<- itemizerResult) {
+func itemize(position int, url string, tweet *twitter.Tweet, resultChan chan<- itemizerResult) {
 	log.Printf("itemize for position %d acquiring token", position)
 	tokens <- struct{}{}  // acquire a token
 	log.Printf("itemize for position %d acquired token", position)
 
-	// figure out the fallback item values
-	author := &feeds.Author{tweet.User.Name, ""}
-	if tweet.RetweetedStatus != nil {
-		author = &feeds.Author{tweet.RetweetedStatus.User.Name, ""}
-	}
-	created, err := time.Parse(time.RubyDate, tweet.CreatedAt)
-	if err != nil {
-		log.Printf("unable to parse tweet's created_at value %s: %s",
-			tweet.CreatedAt, err)
-		created = time.Now()
-	}
-
-	// generate feed item
-	item := &feeds.Item{
-		Title: url,
-		Link: &feeds.Link{Href: url},
-		Description: "",
-		Author: author,
-		Created: created,
-	}
+	// start with a vanilla item
+	item := getDefaultItem(url, tweet)
 
 	// get the html title if possible
 	log.Printf("itemize for position %d retrieving %s", position, url)
@@ -112,24 +103,48 @@ func itemize(position int, url string, tweet twitter.Tweet, resultChan chan<- it
 		}
 	}
 
-	// flesh out the description given the item contents
-	const htmlTemplate = `
-    <div>
-      <a href="{{.Link.Href}}">{{.Title}}</a>
-    </div>
-    <div>
-	via <a href="https://twitter.com/{{.Author.Name}}">{{.Author.Name}}</a>
-    </div>
-    `
-	templ := template.Must(template.New("item").Parse(htmlTemplate))
-	buffer := new(bytes.Buffer)
-	templ.Execute(buffer, item)
-	item.Description = buffer.String()
+	// generate the description again now that we have a real title
+	item.Description = applyItemTemplate(item, defaultDescriptionTemplate)
 
 	log.Printf("itemize for position %d returning result", position)
 	<-tokens  // release the token
 	resultChan <- itemizerResult{position: position, item: item}
 }
+
+
+func getDefaultItem(url string, tweet *twitter.Tweet) *feeds.Item {
+	author := &feeds.Author{tweet.User.Name, ""}
+	if tweet.RetweetedStatus != nil {
+		author = &feeds.Author{tweet.RetweetedStatus.User.Name, ""}
+	}
+
+	created, err := time.Parse(time.RubyDate, tweet.CreatedAt)
+	if err != nil {
+		log.Printf("unable to parse tweet's created_at value %s: %s",
+			tweet.CreatedAt, err)
+		created = time.Now()
+	}
+
+	item := &feeds.Item{
+		Title: url,
+		Link: &feeds.Link{Href: url},
+		Description: "",
+		Author: author,
+		Created: created,
+	}
+
+	item.Description = applyItemTemplate(item, defaultDescriptionTemplate)
+
+	return item
+}
+
+
+func applyItemTemplate(item *feeds.Item, templ *template.Template) string {
+	buffer := new(bytes.Buffer)
+	templ.Execute(buffer, item)
+	return buffer.String()
+}
+
 
 func getHTMLTitle(n *html.Node) string {
 	if n.Type == html.ElementNode && n.Data == "title" {

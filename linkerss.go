@@ -17,6 +17,7 @@ type LinkerssHandler struct {
 }
 
 // TODO: caching somewhere
+// TODO: implement OPTIONS
 func (l LinkerssHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	log.Printf("%+v\n", req)
 
