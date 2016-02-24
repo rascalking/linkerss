@@ -85,21 +85,17 @@ func itemize(position int, url string, tweet *twitter.Tweet, resultChan chan<- i
 	// start with a vanilla item
 	item := getDefaultItem(url, tweet)
 
-	// get the html title if possible
-	log.Printf("itemize for position %d retrieving %s", position, url)
+	// inspect the linked entity for better details
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Printf("unable to retrieve %s: %s", url, err)
 	} else {
 		defer resp.Body.Close()
-		switch {
-		case textHtml.MatchString(resp.Header.Get("Content-Type")):
-			doc, err := html.Parse(resp.Body)
-			if err != nil {
-				log.Printf("unable to parse the body of %s: %s",
-					url, err)
-			}
-			item.Title = getHTMLTitle(doc)
+
+		var contentType = strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]
+		switch contentType {
+		case "text/html":
+			augmentItemHTML(item, resp)
 		}
 	}
 
@@ -143,6 +139,17 @@ func applyItemTemplate(item *feeds.Item, templ *template.Template) string {
 	buffer := new(bytes.Buffer)
 	templ.Execute(buffer, item)
 	return buffer.String()
+}
+
+
+func augmentItemHTML(item *feeds.Item, resp *http.Response) {
+	doc, err := html.Parse(resp.Body)
+	if err != nil {
+		log.Printf("unable to parse the body of %s: %s",
+		resp.Request.URL.String(), err)
+	}
+	item.Title = getHTMLTitle(doc)
+	// TODO - snippet of html body in description
 }
 
 
