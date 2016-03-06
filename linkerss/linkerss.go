@@ -5,8 +5,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/coreos/pkg/flagutil"
+	"github.com/garyburd/redigo/redis"
 	"github.com/rascalking/linkerss"
 )
 
@@ -21,7 +23,10 @@ var (
 	defaultNumTweets = flags.Int("num-tweets", 20,
 		"Default number of tweets to pull from twitter, can be overridden " +
 		"via query parameter")
+	redisServer = flags.String("redis-server", ":6379", "Redis server")
+	redisPassword = flags.String("redis-password", "", "Redis password")
 )
+
 
 func main() {
 	// parse flags
@@ -34,9 +39,12 @@ func main() {
 		log.Fatal("--num-tweets cannot be larger than --max-num-tweets")
 	}
 
+	// set up the redis pool
+	pool := newPool(*redisServer, *redisPassword)
+
 	// set up handlers
 	linkerssHandler := linkerss.LinkerssHandler{*accessToken, *defaultNumTweets,
-						*maxNumTweets}
+						*maxNumTweets, pool}
 	http.Handle("/user", linkerssHandler)
 
 	// log our args before we start listening
@@ -46,4 +54,29 @@ func main() {
 
 	// answer http requests
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+}
+
+
+func newPool(server, password string) *redis.Pool {
+	return &redis.Pool{
+		MaxIdle: 3,
+		IdleTimeout: 240 * time.Second,
+		Dial: func () (redis.Conn, error) {
+			c, err := redis.Dial("tcp", server)
+			if err != nil {
+				return nil, err
+			}
+			if password != "" {
+				if _, err := c.Do("AUTH", password); err != nil {
+					c.Close()
+					return nil, err
+				}
+			}
+			return c, err
+		},
+		TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			_, err := c.Do("PING")
+			return err
+		},
+	}
 }

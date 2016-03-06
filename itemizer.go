@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dghubble/go-twitter/twitter"
+	"github.com/garyburd/redigo/redis"
 	"github.com/gorilla/feeds"
 	"golang.org/x/net/html"
 )
@@ -32,7 +34,8 @@ type itemizerResult struct {
 	item *feeds.Item
 }
 
-func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
+
+func tweetsToFeed(tweets []twitter.Tweet, screenName string, pool *redis.Pool) *feeds.Feed {
 	// hand out work
 	position := 0
 	resultChan := make(chan itemizerResult)
@@ -40,7 +43,7 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 		for _, url := range tweet.Entities.Urls {
 			log.Printf("Launching itemize(%d, %s, %d) in a goroutine",
 						position, url.ExpandedURL, tweet.ID, resultChan)
-			go itemize(position, url.ExpandedURL, &tweet, resultChan)
+			go itemize(position, url.ExpandedURL, &tweet, resultChan, pool)
 			position++
 		}
 	}
@@ -77,25 +80,24 @@ func tweetsToFeed(tweets []twitter.Tweet, screenName string) *feeds.Feed {
 	return feed
 }
 
-func itemize(position int, url string, tweet *twitter.Tweet, resultChan chan<- itemizerResult) {
+
+func itemize(position int, url string, tweet *twitter.Tweet, resultChan chan<- itemizerResult, pool *redis.Pool) {
 	log.Printf("itemize for position %d acquiring token", position)
 	tokens <- struct{}{}  // acquire a token
 	log.Printf("itemize for position %d acquired token", position)
+	// TODO: defer releasing the token, optionally sending result
 
 	// start with a vanilla item
 	item := getDefaultItem(url, tweet)
 
 	// inspect the linked entity for better details
-	resp, err := http.Get(url)
+	body, contentType, err := httpGet(url, pool)
 	if err != nil {
 		log.Printf("unable to retrieve %s: %s", url, err)
 	} else {
-		defer resp.Body.Close()
-
-		var contentType = strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]
 		switch contentType {
 		case "text/html":
-			augmentItemHTML(item, resp)
+			augmentItemHTML(item, &body)
 		}
 	}
 
@@ -142,11 +144,11 @@ func applyItemTemplate(item *feeds.Item, templ *template.Template) string {
 }
 
 
-func augmentItemHTML(item *feeds.Item, resp *http.Response) {
-	doc, err := html.Parse(resp.Body)
+func augmentItemHTML(item *feeds.Item, body *string) {
+	doc, err := html.Parse(strings.NewReader(*body))
 	if err != nil {
-		log.Printf("unable to parse the body of %s: %s",
-		resp.Request.URL.String(), err)
+		// TODO: pass url in for error logging?  return err?
+		log.Printf("unable to parse the body: %s", err)
 	}
 	item.Title = getHTMLTitle(doc)
 	// TODO - snippet of html body in description
@@ -169,4 +171,57 @@ func getHTMLTitle(n *html.Node) string {
 		}
 	}
 	return ""
+}
+
+
+func httpGet(url string, pool *redis.Pool) (body, contentType string, err error) {
+	// TODO: extend errors we encounter rather than logging and returning
+	conn := pool.Get()
+	defer conn.Close()
+
+	// check to see if we have it cached
+	cached, err := redis.Bool(conn.Do("EXISTS", url))
+	if err != nil {
+		log.Printf("error looking for %s in redis: %s", url, err)
+		cached = false
+	}
+
+	if cached {
+		// if we hit an error with redis, fall back to just getting it again
+		reply, err := redis.Values(conn.Do("HMGET", url, "body", "contentType"))
+		if err == nil {
+			if _, err := redis.Scan(reply, &body, &contentType); err != nil {
+				log.Printf("error scanning redis result from %s: %s", url, err)
+			}
+		} else {
+			log.Printf("error retrieving %s from redis: %s", url, err)
+		}
+	}
+
+	if body == "" && contentType == "" {
+		resp, err := http.Get(url)
+		if err != nil {
+			log.Printf("unable to retrieve %s: %s", url, err)
+			return "", "", err
+		}
+		defer resp.Body.Close()
+
+		// read the body
+		contentType = strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]
+		contents, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("error reading response body from %s: %s", url, err)
+			return "", "", err
+		}
+		body = string(contents)
+
+		// cache it
+		var args []interface{}
+		args = append(args, url, "body", body, "contentType", contentType)
+		if _, err = conn.Do("HMSET", args...); err != nil {
+			log.Printf("error storing %s in redis: %s", url, err)
+		}
+	}
+
+	return body, contentType, nil
 }

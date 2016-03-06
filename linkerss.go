@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/dghubble/go-twitter/twitter"
+	"github.com/garyburd/redigo/redis"
 	"golang.org/x/oauth2"
 )
 
@@ -14,9 +15,11 @@ type LinkerssHandler struct {
 	AccessToken string
 	DefaultNumTweets int
 	MaxNumTweets int
+	Pool *redis.Pool
 }
 
-// TODO: caching somewhere
+
+// TODO: cache the twitter api call
 // TODO: implement OPTIONS
 func (l LinkerssHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	log.Printf("%+v\n", req)
@@ -64,7 +67,7 @@ func (l LinkerssHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// turn them into feed entries
-	feed := tweetsToFeed(urlTweets, screenName)
+	feed := tweetsToFeed(urlTweets, screenName, l.Pool)
 
 	// write back to client as rss
 	err = feed.WriteRss(w)

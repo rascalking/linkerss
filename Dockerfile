@@ -4,6 +4,7 @@ ADD . /go/src/github.com/rascalking/linkerss
 RUN go get -d -v \
 	github.com/coreos/pkg/flagutil \
 	github.com/dghubble/go-twitter/twitter \
+	github.com/garyburd/redigo/redis \
 	github.com/gorilla/feeds \
 	golang.org/x/oauth2 \
 	golang.org/x/net/html
